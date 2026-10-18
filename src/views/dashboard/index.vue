@@ -111,13 +111,20 @@
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { CaretTop, CaretBottom, CircleCheck, CircleClose } from '@element-plus/icons-vue'
+import { getConversations } from '@/api/chat'
+import { getTasks } from '@/api/task'
+import { getKnowledgeBases } from '@/api/rag'
+import { getQuota, getDailyTokenStatistics, getModelStatistics } from '@/api/billing'
+import { useUserStore } from '@/stores/user'
 
-// 统计卡片（联调时从 /conversations/stats、/tasks/statistics、/knowledge-bases、/quota 取数）
+const userStore = useUserStore()
+
+// 统计卡片（真实数据：会话/任务/知识库/配额）
 const statCards = ref([
-  { title: '会话总数', value: '1,286', trend: 12.5, icon: 'ChatDotRound', color: '#409eff', bgColor: '#ecf5ff' },
-  { title: '任务总数', value: '342', trend: 8.3, icon: 'List', color: '#67c23a', bgColor: '#f0f9eb' },
-  { title: '知识库', value: '18', trend: -2.1, icon: 'FolderOpened', color: '#e6a23c', bgColor: '#fdf6ec' },
-  { title: '剩余配额', value: '86.4K', trend: 15.7, icon: 'Wallet', color: '#f56c6c', bgColor: '#fef0f0' },
+  { title: '会话总数', value: '--', trend: 0, icon: 'ChatDotRound', color: '#409eff', bgColor: '#ecf5ff' },
+  { title: '任务总数', value: '--', trend: 0, icon: 'List', color: '#67c23a', bgColor: '#f0f9eb' },
+  { title: '知识库', value: '--', trend: 0, icon: 'FolderOpened', color: '#e6a23c', bgColor: '#fdf6ec' },
+  { title: '今日剩余配额', value: '--', trend: 0, icon: 'Wallet', color: '#f56c6c', bgColor: '#fef0f0' },
 ])
 
 const trendRange = ref('7')
@@ -128,44 +135,26 @@ let trendChart: echarts.ECharts | null = null
 let taskPie: echarts.ECharts | null = null
 let modelBar: echarts.ECharts | null = null
 
-// 演示数据（联调时从 /token/statistics/daily 取）
-const trendData = {
-  '7': {
-    dates: ['10/06', '10/07', '10/08', '10/09', '10/10', '10/11', '10/12'],
-    tokens: [1200, 1900, 1500, 2800, 2200, 3100, 2600],
-    calls: [45, 72, 58, 96, 82, 110, 95],
-  },
-  '30': {
-    dates: Array.from({ length: 30 }, (_, i) => `${String(i + 1).padStart(2, '0')}`),
-    tokens: Array.from({ length: 30 }, () => Math.floor(Math.random() * 3000 + 800)),
-    calls: Array.from({ length: 30 }, () => Math.floor(Math.random() * 100 + 30)),
-  },
-}
+// Token 用量趋势（真实数据）
+interface TrendData { dates: string[]; tokens: number[]; calls: number[] }
+const trendData = ref<Record<string, TrendData>>({
+  '7': { dates: [], tokens: [], calls: [] },
+  '30': { dates: [], tokens: [], calls: [] },
+})
 
-// 任务状态分布（联调时从 /tasks/statistics 取）
-const taskStatusData = [
-  { value: 12, name: '运行中', itemStyle: { color: '#409eff' } },
-  { value: 256, name: '已完成', itemStyle: { color: '#67c23a' } },
-  { value: 18, name: '失败', itemStyle: { color: '#f56c6c' } },
-  { value: 8, name: '已取消', itemStyle: { color: '#909399' } },
-]
+// 任务状态分布（真实聚合）
+const taskStatusData = ref<{ value: number; name: string; itemStyle: { color: string } }[]>([])
 
-// 模型调用分布（联调时从 /token/statistics/model 取）
-const modelData = {
-  models: ['GPT-4o', 'DeepSeek-V2', 'GPT-3.5', 'Claude-3', '通义千问'],
-  values: [4200, 3100, 2800, 1500, 900],
-}
+// 模型调用分布（真实数据）
+const modelData = ref<{ models: string[]; values: number[] }>({ models: [], values: [] })
 
-// 最近活动（联调时从 /conversations + /tasks 聚合）
+// 最近活动（演示数据，待聚合多接口）
 const recentActivities = ref([
-  { id: 1, title: '新建对话', desc: '用户发起了一轮新的 AI 对话', time: '2 分钟前', type: 'primary' },
-  { id: 2, title: '任务完成', desc: '文档向量化任务 #2841 执行成功', time: '15 分钟前', type: 'success' },
-  { id: 3, title: '上传文档', desc: '知识库「产品手册」新增 3 个文档', time: '1 小时前', type: 'warning' },
-  { id: 4, title: '配额扣减', desc: '对话消耗 Token 2,840，剩余 86.4K', time: '2 小时前', type: 'info' },
-  { id: 5, title: '任务失败', desc: 'RAG 检索任务 #2839 超时，已自动重试', time: '3 小时前', type: 'danger' },
+  { id: 1, title: '新建对话', desc: '用户发起了一轮新的 AI 对话', time: '—', type: 'primary' },
+  { id: 2, title: '任务完成', desc: '文档向量化任务执行成功', time: '—', type: 'success' },
 ])
 
-// 服务状态（联调时从 /actuator/health + Nacos 取）
+// 服务状态（演示标注，联调期以进程在线为准）
 const services = ref([
   { name: '网关服务', online: true },
   { name: '用户服务', online: true },
@@ -175,7 +164,87 @@ const services = ref([
   { name: '计费服务', online: true },
 ])
 
-const uptime = ref('12 天 6 小时')
+const uptime = ref('开发环境')
+
+function fmtDate(offset: number) {
+  const d = new Date()
+  d.setDate(d.getDate() - offset)
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+
+async function loadStats() {
+  try {
+    const [convRes, taskRes, kbRes, quotaRes] = await Promise.all([
+      getConversations({ page: 1, size: 1 }),
+      getTasks({ page: 1, size: 1 }),
+      getKnowledgeBases({ page: 1, size: 1 }),
+      getQuota(),
+    ])
+    statCards.value[0].value = String(convRes.data?.total ?? 0)
+    statCards.value[1].value = String(taskRes.data?.total ?? 0)
+    statCards.value[2].value = String(kbRes.data?.total ?? 0)
+    const quotaList = quotaRes.data || []
+    const q = quotaList[0] || {}
+    statCards.value[3].value = q.dailyRemaining != null ? String(q.dailyRemaining) : '--'
+  } catch {
+    // 统计卡片加载失败保持占位
+  }
+}
+
+async function loadTrend(range: string) {
+  const userId = userStore.userInfo?.userId || userStore.userInfo?.id
+  if (!userId) return
+  const days = range === '7' ? 7 : 30
+  const startDate = fmtDate(days - 1)
+  const endDate = fmtDate(0)
+  try {
+    const res: any = await getDailyTokenStatistics(userId, startDate, endDate)
+    const items = res.data?.items || []
+    const dates = items.map((i: any) => String(i.date).slice(5))
+    const tokens = items.map((i: any) => i.tokens || 0)
+    const calls = items.map((i: any) => i.count || 0)
+    trendData.value[range] = { dates, tokens, calls }
+  } catch {
+    trendData.value[range] = { dates: [], tokens: [], calls: [] }
+  }
+  updateTrendChart()
+}
+
+async function loadTaskStatus() {
+  try {
+    const res: any = await getTasks({ page: 1, size: 100 })
+    const list = res.data?.records || []
+    const statusMap: Record<string, number> = {}
+    list.forEach((t: any) => { statusMap[t.status] = (statusMap[t.status] || 0) + 1 })
+    const colors: Record<string, string> = { RUNNING: '#409eff', SUCCESS: '#67c23a', FAILED: '#f56c6c', CANCELLED: '#909399', PENDING: '#e6a23c' }
+    taskStatusData.value = Object.entries(statusMap).map(([name, value]) => ({
+      value,
+      name,
+      itemStyle: { color: colors[name] || '#909399' },
+    }))
+  } catch {
+    taskStatusData.value = []
+  }
+  updateTaskPie()
+}
+
+async function loadModelStats() {
+  const userId = userStore.userInfo?.userId || userStore.userInfo?.id
+  if (!userId) return
+  try {
+    const res: any = await getModelStatistics(userId, fmtDate(29), fmtDate(0))
+    const items = res.data?.items || []
+    modelData.value = {
+      models: items.map((i: any) => i.modelId || i.provider || 'unknown'),
+      values: items.map((i: any) => i.tokens || 0),
+    }
+  } catch {
+    modelData.value = { models: [], values: [] }
+  }
+  updateModelBar()
+}
 
 function initTrendChart() {
   if (!trendChartRef.value) return
@@ -185,7 +254,7 @@ function initTrendChart() {
 
 function updateTrendChart() {
   if (!trendChart) return
-  const data = trendData[trendRange.value as keyof typeof trendData]
+  const data = trendData.value[trendRange.value] || { dates: [], tokens: [], calls: [] }
   trendChart.setOption({
     tooltip: { trigger: 'axis' },
     legend: { data: ['Token 消耗', '调用次数'], right: 0 },
@@ -219,6 +288,12 @@ function updateTrendChart() {
 function initTaskPie() {
   if (!taskPieRef.value) return
   taskPie = echarts.init(taskPieRef.value)
+  updateTaskPie()
+}
+
+function updateTaskPie() {
+  if (!taskPie) return
+  const data = taskStatusData.value.length > 0 ? taskStatusData.value : [{ value: 1, name: '暂无数据', itemStyle: { color: '#e4e7ed' } }]
   taskPie.setOption({
     tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
     legend: { orient: 'vertical', left: 'left' },
@@ -228,7 +303,7 @@ function initTaskPie() {
       avoidLabelOverlap: false,
       label: { show: false },
       emphasis: { label: { show: true, fontSize: 14, fontWeight: 'bold' } },
-      data: taskStatusData,
+      data,
     }],
   })
 }
@@ -236,14 +311,21 @@ function initTaskPie() {
 function initModelBar() {
   if (!modelBarRef.value) return
   modelBar = echarts.init(modelBarRef.value)
+  updateModelBar()
+}
+
+function updateModelBar() {
+  if (!modelBar) return
+  const models = modelData.value.models.length > 0 ? modelData.value.models : ['暂无数据']
+  const values = modelData.value.models.length > 0 ? modelData.value.values : [0]
   modelBar.setOption({
     tooltip: { trigger: 'axis' },
     grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-    xAxis: { type: 'category', data: modelData.models, axisLabel: { rotate: 20, fontSize: 11 } },
+    xAxis: { type: 'category', data: models, axisLabel: { rotate: 20, fontSize: 11 } },
     yAxis: { type: 'value', name: 'Token' },
     series: [{
       type: 'bar',
-      data: modelData.values,
+      data: values,
       barWidth: '50%',
       itemStyle: {
         borderRadius: [4, 4, 0, 0],
@@ -262,7 +344,7 @@ function handleResize() {
   modelBar?.resize()
 }
 
-watch(trendRange, () => nextTick(updateTrendChart))
+watch(trendRange, () => nextTick(() => loadTrend(trendRange.value)))
 
 onMounted(() => {
   nextTick(() => {
@@ -271,6 +353,10 @@ onMounted(() => {
     initModelBar()
   })
   window.addEventListener('resize', handleResize)
+  loadStats()
+  loadTrend(trendRange.value)
+  loadTaskStatus()
+  loadModelStats()
 })
 
 onUnmounted(() => {

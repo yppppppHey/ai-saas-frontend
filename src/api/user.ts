@@ -1,8 +1,8 @@
 import { request } from './request'
 
-// 获取用户资料
+// 获取用户资料（后端无 GET /profile，用 /user/me 返回的 UserInfoDTO）
 export function getUserProfile() {
-  return request({ url: '/user/profile', method: 'get' })
+  return request({ url: '/user/me', method: 'get' })
 }
 
 // 更新用户资料

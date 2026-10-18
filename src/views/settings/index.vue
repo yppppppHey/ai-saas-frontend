@@ -46,7 +46,7 @@
         <el-card style="margin-top: 20px">
           <template #header>账号信息</template>
           <el-descriptions :column="1" border>
-            <el-descriptions-item label="用户 ID">{{ userStore.userInfo?.id || '--' }}</el-descriptions-item>
+            <el-descriptions-item label="用户 ID">{{ userStore.userInfo?.userId ?? userStore.userInfo?.id ?? '--' }}</el-descriptions-item>
             <el-descriptions-item label="注册时间">{{ userStore.userInfo?.createdAt || '--' }}</el-descriptions-item>
             <el-descriptions-item label="账号状态">
               <el-tag type="success">正常</el-tag>
@@ -101,8 +101,15 @@ const passwordRules: FormRules = {
 
 async function loadProfile() {
   try {
-    // const res: any = await getUserProfile()
-    // Object.assign(profileForm, res.data)
+    const res: any = await getUserProfile()
+    const data = res.data || res
+    profileForm.username = data.username || ''
+    profileForm.email = data.email || ''
+    profileForm.phone = data.phone || ''
+    profileForm.avatar = data.avatarUrl || ''
+    // 回写 store，刷新账号信息区
+    userStore.userInfo = { ...(userStore.userInfo || {}), ...data }
+    localStorage.setItem('userInfo', JSON.stringify(userStore.userInfo))
   } catch {
     // 错误已处理
   }
@@ -110,8 +117,12 @@ async function loadProfile() {
 
 async function saveProfile() {
   try {
-    // await updateUserProfile(profileForm)
-    ElMessage.success('保存成功（框架占位）')
+    await updateUserProfile({ username: profileForm.username, email: profileForm.email, phone: profileForm.phone })
+    ElMessage.success('保存成功')
+    if (userStore.userInfo) {
+      userStore.userInfo.email = profileForm.email
+      userStore.userInfo.phone = profileForm.phone
+    }
   } catch {
     // 错误已处理
   }
@@ -119,8 +130,9 @@ async function saveProfile() {
 
 async function handleAvatarChange(file: any) {
   try {
-    // await uploadAvatar(file.raw)
-    ElMessage.success('头像上传成功（框架占位）')
+    await uploadAvatar(file.raw)
+    ElMessage.success('头像上传成功')
+    loadProfile()
   } catch {
     // 错误已处理
   }
@@ -130,8 +142,8 @@ async function changePassword() {
   if (!passwordFormRef.value) return
   await passwordFormRef.value.validate()
   try {
-    // await apiChangePassword(passwordForm)
-    ElMessage.success('密码修改成功（框架占位）')
+    await apiChangePassword({ oldPassword: passwordForm.oldPassword, newPassword: passwordForm.newPassword, confirmPassword: passwordForm.confirmPassword })
+    ElMessage.success('密码修改成功')
     passwordForm.oldPassword = ''
     passwordForm.newPassword = ''
     passwordForm.confirmPassword = ''

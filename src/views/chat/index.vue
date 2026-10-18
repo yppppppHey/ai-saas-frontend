@@ -58,10 +58,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, reactive, nextTick, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, ChatDotRound, User, Service, CircleClose, Promotion } from '@element-plus/icons-vue'
-import { streamChat, createConversation as apiCreateConversation } from '@/api/chat'
+import { getConversations, getMessages, streamChat, createConversation as apiCreateConversation, abortChat } from '@/api/chat'
 
 const conversations = ref<any[]>([])
 const currentConversationId = ref<string>('')
@@ -69,51 +69,113 @@ const messages = ref<any[]>([])
 const inputText = ref('')
 const isStreaming = ref(false)
 const messageScrollRef = ref()
+const currentMessageId = ref<string>('')
 
-async function createConversation() {
-  // 框架：联调时调用 API
-  ElMessage.info('新建对话功能待联调')
+async function loadConversations() {
+  try {
+    const res: any = await getConversations()
+    conversations.value = res.data?.records || res.data || []
+    if (conversations.value.length > 0) {
+      selectConversation(conversations.value[0])
+    }
+  } catch {
+    ElMessage.error('会话列表加载失败')
+  }
 }
 
-function selectConversation(conv: any) {
-  currentConversationId.value = conv.id
-  // 框架：联调时加载消息列表
+async function createConversation() {
+  try {
+    const res: any = await apiCreateConversation({ title: '新对话', model: 'deepseek-chat' })
+    const id = res.data
+    ElMessage.success('新建对话成功')
+    await loadConversations()
+    const created = conversations.value.find((c: any) => c.id === id)
+    if (created) selectConversation(created)
+  } catch {
+    ElMessage.error('新建对话失败')
+  }
+}
+
+async function selectConversation(conv: any) {
+  currentConversationId.value = String(conv.id)
+  messages.value = []
+  try {
+    const res: any = await getMessages(String(conv.id))
+    const list = res.data?.records || res.data || []
+    messages.value = list.map((m: any) => ({
+      id: String(m.id),
+      role: m.role === 'user' ? 'user' : 'assistant',
+      content: m.content || '',
+    }))
+    scrollToBottom()
+  } catch {
+    ElMessage.error('消息加载失败')
+  }
 }
 
 async function sendMessage() {
   if (!inputText.value.trim()) return
   if (isStreaming.value) return
 
+  // 无会话时先自动创建
+  if (!currentConversationId.value) {
+    try {
+      const res: any = await apiCreateConversation({ title: '新对话', model: 'deepseek-chat' })
+      currentConversationId.value = String(res.data)
+      await loadConversations()
+    } catch {
+      ElMessage.error('创建会话失败，请稍后再试')
+      return
+    }
+  }
+
   const userMsg = { id: Date.now().toString(), role: 'user', content: inputText.value }
   messages.value.push(userMsg)
   const question = inputText.value
   inputText.value = ''
   isStreaming.value = true
+  currentMessageId.value = ''
 
-  const aiMsg = { id: (Date.now() + 1).toString(), role: 'assistant', content: '' }
+  const aiMsg = reactive({ id: (Date.now() + 1).toString(), role: 'assistant', content: '' })
   messages.value.push(aiMsg)
 
-  // 框架：SSE 流式调用（联调时启用）
-  // streamChat(
-  //   { conversationId: currentConversationId.value, message: question },
-  //   (chunk) => { aiMsg.content += chunk; scrollToBottom() },
-  //   () => { isStreaming.value = false },
-  //   (error) => { ElMessage.error('生成失败'); isStreaming.value = false },
-  // )
-
-  // 演示占位
-  setTimeout(() => {
-    aiMsg.content = '（这是前端框架占位，联调后将展示真实 AI 流式回复）'
-    isStreaming.value = false
-    scrollToBottom()
-  }, 500)
+  streamChat(
+    { conversationId: Number(currentConversationId.value), content: question },
+    (chunk) => {
+      if (chunk && chunk !== '[DONE]') {
+        aiMsg.content += chunk
+        scrollToBottom()
+      }
+    },
+    () => {
+      isStreaming.value = false
+      if (!aiMsg.content) aiMsg.content = '未能生成回复（模型服务未配置或调用失败）'
+      scrollToBottom()
+    },
+    (error) => {
+      isStreaming.value = false
+      if (!aiMsg.content) {
+        aiMsg.content = '生成失败：' + (error?.message || '未知错误')
+      }
+      ElMessage.error('生成失败')
+    },
+  )
 
   scrollToBottom()
 }
 
-function abortGeneration() {
+async function abortGeneration() {
   isStreaming.value = false
-  ElMessage.info('已停止生成')
+  if (currentMessageId.value) {
+    try {
+      await abortChat(currentMessageId.value)
+      ElMessage.info('已停止生成')
+    } catch {
+      ElMessage.info('已停止生成')
+    }
+  } else {
+    ElMessage.info('已停止生成')
+  }
 }
 
 function scrollToBottom() {
@@ -124,6 +186,8 @@ function scrollToBottom() {
     }
   })
 }
+
+onMounted(loadConversations)
 </script>
 
 <style scoped>

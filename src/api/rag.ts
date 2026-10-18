@@ -20,12 +20,12 @@ export function getDocuments(kbId: string, params?: Record<string, any>) {
   return request({ url: `/v1/knowledge-bases/${kbId}/documents`, method: 'get', params })
 }
 
-// 上传文档
+// 上传文档（后端为 POST /documents/upload）
 export function uploadDocument(kbId: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
   return request({
-    url: `/v1/knowledge-bases/${kbId}/documents`,
+    url: `/v1/knowledge-bases/${kbId}/documents/upload`,
     method: 'post',
     data: formData,
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -37,7 +37,7 @@ export function deleteDocument(kbId: string, docId: string) {
   return request({ url: `/v1/knowledge-bases/${kbId}/documents/${docId}`, method: 'delete' })
 }
 
-// RAG 检索
+// RAG 检索（后端为 POST /api/v1/rag/query）
 export function ragSearch(data: Record<string, any>) {
-  return request({ url: '/v1/rag/search', method: 'post', data })
+  return request({ url: '/v1/rag/query', method: 'post', data })
 }

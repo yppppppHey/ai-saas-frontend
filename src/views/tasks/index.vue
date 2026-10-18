@@ -45,9 +45,15 @@ const loading = ref(false)
 async function loadTasks() {
   loading.value = true
   try {
-    // 框架：联调时启用
-    // const res: any = await getTasks()
-    // tasks.value = res.data || res.records || []
+    const res: any = await getTasks()
+    const list = res.data?.records || res.data || []
+    tasks.value = list.map((t: any) => ({
+      id: t.id,
+      type: t.taskType || t.type,
+      status: t.status,
+      progress: t.progress || 0,
+      createdAt: t.createdAt || '',
+    }))
   } catch {
     // 错误已处理
   } finally {

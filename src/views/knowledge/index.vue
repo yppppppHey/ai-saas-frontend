@@ -196,7 +196,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Upload, FolderOpened, Search } from '@element-plus/icons-vue'
-import { getKnowledgeBases, createKnowledgeBase, getDocuments, uploadDocument, deleteDocument } from '@/api/rag'
+import { getKnowledgeBases, createKnowledgeBase, getDocuments, uploadDocument, deleteDocument, ragSearch } from '@/api/rag'
 
 const knowledgeBases = ref<any[]>([])
 const documents = ref<any[]>([])
@@ -224,9 +224,17 @@ const colors = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#909399', '#8e44ad'
 
 async function loadKbList() {
   try {
-    // 框架：联调时启用
-    // const res: any = await getKnowledgeBases()
-    // knowledgeBases.value = res.data || res.records || []
+    const res: any = await getKnowledgeBases()
+    const list = res.data?.records || res.data || []
+    knowledgeBases.value = list.map((kb: any) => ({
+      id: kb.kbId || String(kb.id),
+      name: kb.kbName || kb.name,
+      description: kb.description || '',
+      documentCount: kb.totalDocuments ?? kb.documentCount ?? 0,
+      chunkCount: kb.totalChunks ?? kb.chunkCount ?? 0,
+      totalChars: kb.totalSize ?? kb.totalChars ?? 0,
+      color: colors[knowledgeBases.value.length % colors.length],
+    }))
   } catch {
     // 错误已处理
   }
@@ -237,8 +245,20 @@ async function selectKb(kb: any) {
   currentKb.value = kb
   loading.value = true
   try {
-    // const res: any = await getDocuments(kb.id)
-    // documents.value = res.data || res.records || []
+    const res: any = await getDocuments(kb.id)
+    const list = res.data?.records || res.data || []
+    const statusMap: Record<number, string> = { 0: 'PENDING', 1: 'PROCESSING', 2: 'SUCCESS', 3: 'FAILED' }
+    documents.value = list.map((d: any) => ({
+      id: d.docId || String(d.id),
+      name: d.docName || d.fileName || d.name,
+      docType: (d.docType || 'FILE').toUpperCase(),
+      size: d.docSize || d.fileSize ? formatSize(d.docSize || d.fileSize) : '',
+      charCount: d.charCount || 0,
+      chunkCount: d.chunkCount || 0,
+      status: d.processStatusDesc || statusMap[d.processStatus] || d.status || 'PENDING',
+      progress: d.processProgress ?? d.progress ?? 0,
+      createdAt: d.createdAt || '',
+    }))
   } catch {
     // 错误已处理
   } finally {
@@ -252,8 +272,12 @@ async function createKb() {
     return
   }
   try {
-    // await createKnowledgeBase(newKbForm)
-    ElMessage.success('创建成功（框架占位）')
+    await createKnowledgeBase({
+      kbName: newKbForm.name,
+      description: newKbForm.description,
+      embeddingModel: newKbForm.embeddingModel,
+    })
+    ElMessage.success('创建成功')
     showCreateDialog.value = false
     newKbForm.name = ''
     newKbForm.description = ''
@@ -266,8 +290,8 @@ async function createKb() {
 async function handleFileUpload(file: any) {
   if (!currentKbId.value) return
   try {
-    // await uploadDocument(currentKbId.value, file.raw)
-    ElMessage.success(`已上传 ${file.name}，正在处理...（框架占位）`)
+    await uploadDocument(currentKbId.value, file.raw)
+    ElMessage.success(`已上传 ${file.name}，正在处理中`)
     if (currentKb.value) selectKb(currentKb.value)
   } catch {
     // 错误已处理
@@ -277,8 +301,8 @@ async function handleFileUpload(file: any) {
 async function deleteDoc(row: any) {
   await ElMessageBox.confirm(`确定删除文档 ${row.name}？删除后切片和向量数据将一并清除。`, '提示', { type: 'warning' })
   try {
-    // await deleteDocument(currentKbId.value, row.id)
-    ElMessage.success('删除成功（框架占位）')
+    await deleteDocument(currentKbId.value, row.id)
+    ElMessage.success('删除成功')
     if (currentKb.value) selectKb(currentKb.value)
   } catch {
     // 错误已处理
@@ -286,12 +310,11 @@ async function deleteDoc(row: any) {
 }
 
 function reprocess(row: any) {
-  ElMessage.info(`文档 ${row.name} 重新处理中...（框架占位）`)
+  ElMessage.info(`文档 ${row.name} 重新处理功能待接入`)
 }
 
 function viewChunks(row: any) {
   currentDoc.value = row
-  // 框架：联调时从 /documents/{docId}/chunks 取切片列表
   currentChunks.value = []
   showChunksDrawer.value = true
 }
@@ -303,19 +326,29 @@ async function runSearch() {
   }
   searching.value = true
   try {
-    // const res: any = await ragSearch({ kbId: currentKbId.value, query: searchQuery.value, topK: 5 })
-    // searchResults.value = res.data || []
-    // 演示占位
-    searchResults.value = [
-      { chunkIndex: 3, documentTitle: '产品手册.pdf', score: 0.92, content: '本产品支持多模型切换，用户可在设置中选择默认模型，系统会根据模型可用性自动降级。', charCount: 86, tokenCount: 42 },
-      { chunkIndex: 7, documentTitle: '产品手册.pdf', score: 0.87, content: 'API 调用采用 Token 计费模式，输入和输出分别计费，配额不足时自动拦截请求。', charCount: 72, tokenCount: 36 },
-      { chunkIndex: 1, documentTitle: 'FAQ.md', score: 0.78, content: '常见问题：如何重置密码？点击登录页「忘记密码」，通过邮箱验证码重置。', charCount: 58, tokenCount: 29 },
-    ]
+    const res: any = await ragSearch({ kbId: currentKbId.value, query: searchQuery.value, topK: 5 })
+    const list = res.data?.results || res.data?.chunks || res.data || []
+    searchResults.value = Array.isArray(list) ? list.map((item: any, idx: number) => ({
+      chunkIndex: item.chunkIndex ?? idx,
+      documentTitle: item.documentTitle || item.docName || '未知文档',
+      score: item.score ?? 0,
+      content: item.content || item.text || '',
+      charCount: item.charCount || 0,
+      tokenCount: item.tokenCount || 0,
+    })) : []
+    if (searchResults.value.length === 0) ElMessage.info('未检索到相关片段')
   } catch {
     // 错误已处理
   } finally {
     searching.value = false
   }
+}
+
+function formatSize(bytes: number) {
+  if (!bytes) return '-'
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB'
 }
 
 function docTypeColor(type: string) {
@@ -329,20 +362,7 @@ function statusText(status: string) {
 }
 
 onMounted(() => {
-  // 演示数据
-  knowledgeBases.value = [
-    { id: '1', name: '产品手册', description: '产品功能说明与使用指南', documentCount: 12, chunkCount: 386, totalChars: 128400, color: colors[0] },
-    { id: '2', name: '客服 FAQ', description: '常见问题与标准答案', documentCount: 8, chunkCount: 152, totalChars: 45600, color: colors[1] },
-    { id: '3', name: '技术文档', description: 'API 接口文档与架构说明', documentCount: 15, chunkCount: 524, totalChars: 186000, color: colors[2] },
-    { id: '4', name: '合同模板', description: '各类合同模板与条款', documentCount: 6, chunkCount: 98, totalChars: 32000, color: colors[3] },
-  ]
-  documents.value = [
-    { id: '1', name: '产品功能介绍.pdf', docType: 'PDF', size: '2.4 MB', charCount: 28600, chunkCount: 86, status: 'READY', progress: 100, createdAt: '2026-10-10 14:30' },
-    { id: '2', name: '使用指南.docx', docType: 'DOCX', size: '1.8 MB', charCount: 22400, chunkCount: 68, status: 'READY', progress: 100, createdAt: '2026-10-10 15:20' },
-    { id: '3', name: 'API 接口文档.md', docType: 'MD', size: '156 KB', charCount: 45200, chunkCount: 142, status: 'PROCESSING', progress: 65, createdAt: '2026-10-12 10:15' },
-    { id: '4', name: '常见问题.txt', docType: 'TXT', size: '89 KB', charCount: 12800, chunkCount: 38, status: 'READY', progress: 100, createdAt: '2026-10-11 09:00' },
-    { id: '5', name: '架构设计.pdf', docType: 'PDF', size: '3.2 MB', charCount: 35600, chunkCount: 0, status: 'FAILED', progress: 0, createdAt: '2026-10-12 11:30' },
-  ]
+  loadKbList()
 })
 </script>
 

@@ -1,20 +1,23 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { login as apiLogin, getCurrentUser, logout as apiLogout } from '@/api/auth'
+import { login as apiLogin, getCurrentUser as apiGetCurrentUser, logout as apiLogout } from '@/api/auth'
 
 export const useUserStore = defineStore('user', () => {
   const token = ref<string>(localStorage.getItem('token') || '')
   const userInfo = ref<Record<string, any> | null>(JSON.parse(localStorage.getItem('userInfo') || 'null'))
 
   async function login(account: string, password: string) {
-    try {
-      const res: any = await apiLogin({ account, password })
-      token.value = res.data?.token || res.token || ''
-      userInfo.value = res.data?.user || res.user || null
-    } catch {
-      // 框架演示模式：后端未启动时使用假数据登录，便于预览界面（联调时删除此 catch 分支）
-      token.value = 'demo-token-' + Date.now()
-      userInfo.value = { id: 1, username: account, account, email: account + '@demo.com' }
+    const res: any = await apiLogin({ account, password })
+    token.value = res.data?.accessToken || res.data?.token || res.token || ''
+    userInfo.value = res.data?.user || res.user || null
+    // 登录成功后拉取用户信息（后端登录响应不含 user 字段）
+    if (token.value) {
+      try {
+        const me: any = await apiGetCurrentUser()
+        userInfo.value = me.data || me
+      } catch {
+        // 用户信息拉取失败不阻断登录
+      }
     }
     localStorage.setItem('token', token.value)
     localStorage.setItem('userInfo', JSON.stringify(userInfo.value))
@@ -22,7 +25,7 @@ export const useUserStore = defineStore('user', () => {
   }
 
   async function fetchUserInfo() {
-    const res: any = await getCurrentUser()
+    const res: any = await apiGetCurrentUser()
     userInfo.value = res.data || res
     localStorage.setItem('userInfo', JSON.stringify(userInfo.value))
     return res

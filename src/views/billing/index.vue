@@ -50,10 +50,15 @@ const timeRange = ref('today')
 
 async function loadQuota() {
   try {
-    // const res: any = await getQuota()
-    // quota.remaining = res.data?.remaining || 0
-    // quota.total = res.data?.total || 0
-    // quota.percentage = quota.total ? Math.round((quota.remaining / quota.total) * 100) : 0
+    const res: any = await getQuota()
+    const list = res.data || []
+    // 取第一个配额（对话 Token）
+    const q = list[0] || {}
+    quota.remaining = q.dailyRemaining ?? '--'
+    const dailyLimit = q.dailyLimit || 0
+    const dailyUsed = q.dailyUsed || 0
+    quota.total = dailyLimit
+    quota.percentage = dailyLimit ? Math.round((dailyUsed / dailyLimit) * 100) : 0
   } catch {
     // 错误已处理
   }
@@ -62,8 +67,15 @@ async function loadQuota() {
 async function loadRecords() {
   loading.value = true
   try {
-    // const res: any = await getBillingRecords({ range: timeRange.value })
-    // records.value = res.data || res.records || []
+    const res: any = await getBillingRecords()
+    const list = res.data?.records || res.data || []
+    records.value = list.map((r: any) => ({
+      time: r.createdAt || '',
+      type: r.operationType || 'chat',
+      model: r.modelId || '-',
+      tokens: r.totalTokens ?? 0,
+      cost: r.costCny != null ? '¥' + Number(r.costCny).toFixed(4) : (r.totalCost ?? 0),
+    }))
   } catch {
     // 错误已处理
   } finally {
